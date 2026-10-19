@@ -104,73 +104,25 @@ npm run verify   # 5 道闸门，见下
 
 ## 安装
 
-### 1. 打包
+**图形界面（没装 dsh CLI 也能用）**：点 DSH 左侧栏的 **插件 → 添加插件 → 安装第三方插件**，
+在「包名或地址」填下面这一行，安装后重启 DSH：
 
-仓库里已经带着构建产物（`lib/`），只有改了客户端源码才需要重新构建：
-
-```bash
-npm install
-npm run build      # 生成 lib/client.js
-npm pack           # 生成 dsh-tavily-web-search-<version>.tgz
+```
+https://github.com/Yoahoug/dsh-workspace#path:/dsh-tavily-web-search
 ```
 
-### 2. 装进 profile
-
-把插件装成 profile 的依赖，并**加入 bundle 列表**（否则插件的 `cordis.patch.yml` 不会生效）：
+**命令行**：
 
 ```bash
-# 本机仓库（把插件拷进 profile 的 node_modules，不走软链）
-dsh plugin --profile desktop add file:/path/to/dsh-workspace/dsh-tavily-web-search
-
-# 或者从 GitHub 直接装（git 子目录）
 dsh plugin --profile desktop add "git+https://github.com/Yoahoug/dsh-workspace.git#path:/dsh-tavily-web-search"
-
-# 或者装打包好的 tgz
+# 或本机目录 / tgz
+dsh plugin --profile desktop add file:$HOME/Desktop/dsh-workspace/dsh-tavily-web-search
 dsh plugin --profile desktop add file:/path/to/dsh-tavily-web-search-0.8.1.tgz
 ```
 
-`dsh plugin add` 会自动把插件加进 `dsh.profile.bundles` 并写进 `dependencies`；
-手工装的话记得自己补，`package.json` 形如：
-
-```jsonc
-"dependencies": {
-  "dsh-tavily-web-search": "file:/path/to/dsh-workspace/dsh-tavily-web-search"
-},
-"dsh": {
-  "profile": {
-    "bundles": [
-      "@deepseek-ai/dsh-base",
-      "@deepseek-ai/dsh-web-app",
-      "dsh-tavily-web-search"   // ← 新增，放在 dsh-web-app 之后
-    ]
-  }
-}
-```
-
-> **别用 `pnpm link` / 目录绝对路径（`pnpm add /path/to/dir`）**：那会在 profile 里留下软链，
-> Node 会按真实路径（仓库目录）解析 `@deepseek-ai/*` peer，仓库里没有这些包，于是启动时报
-> `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/schemastery'`。
-> `file:` 协议是**拷贝**（pnpm 会 hard-link 到 store），peer 从 profile 的 `node_modules` 解析，
-> 这是本地装插件唯一稳的写法。
-
-### 3. 迁移旧 Key 池（从 0.6.x 升级时）
-
-0.6.x 的 Key 池存在旧的 `$DSH_HOME/settings.yaml` 里，0.1.7 已不再读取该文件。把该 section 原样搬进 profile 的 `cordis.patch.yml`（凭据引用不变，因此已存的密钥继续可用）：
-
-```yaml
-- id: web-search-tavily
-  name: dsh-tavily-web-search
-  config:
-    keys:
-      - id: mth3iduzu7kb77
-        name: 我的
-        ref: TAVILY_API_KEY_MTH3IDUZU7KB77
-        enabled: false
-```
-
-### 4. 重启生效
-
-重启 `dsh web`。此后模型侧每次 `web_search` 都会走 Tavily。
+装完重启 DSH，此后模型侧每次 `web_search` 都走 Tavily。本地目录、`pnpm link` 的坑、
+手工改 profile manifest、旧 Key 池迁移，都写在仓库的
+[开发与安装说明](../docs/DEVELOPMENT.md) 里。
 
 ## 配置项
 
