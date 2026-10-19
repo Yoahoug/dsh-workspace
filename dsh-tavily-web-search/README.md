@@ -189,7 +189,10 @@ dsh plugin --profile desktop add file:/path/to/dsh-tavily-web-search-0.8.1.tgz
 再确认一下 `web_fetch` 没被带塌（这正是本仓库补丁要解决的问题）：
 
 ```bash
-dsh --profile desktop --dump-config | grep -A4 '^- id: web$'
+# desktop profile 只能由 Electron 应用管理，命令行 dump 会拒绝；复制一份再看
+cp -R ~/.dsh/profiles/desktop ~/.dsh/profiles/probe
+dsh --profile probe --dump-config | grep -A4 '^- id: web$'
+rm -rf ~/.dsh/profiles/probe
 ```
 
 期望输出里同时有 `searchProvider: tavily` 与 `fetchProvider: http` 两行。只有一行就说明用的是有问题的 patch。

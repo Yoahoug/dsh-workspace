@@ -93,12 +93,21 @@ dsh plugin --profile desktop add file:$PWD/dsh-tavily-web-search-0.8.1.tgz
 
 ### 验证
 
-```bash
-# 两个 provider 都在？（应有 searchProvider: tavily 和 fetchProvider: http 两行）
-dsh --profile desktop --dump-config | grep -A4 '^- id: web$'
+`desktop` 这个 profile 被标记为「只由 Electron 应用管理」，命令行直接 `--dump-config`
+会报 `profile "desktop" is managed exclusively by the Electron application`。复制一份再 dump：
 
-# 插件行真的挂上了？（应能看到 web-search-tavily）
-dsh --profile desktop --dump-config | grep -n 'web-search-tavily'
+```bash
+# 拷一份 profile，用别名查看合成结果
+cp -R ~/.dsh/profiles/desktop ~/.dsh/profiles/probe
+dsh --profile probe --dump-config | grep -A4 '^- id: web$'
+# 期望看到两行：searchProvider: tavily / fetchProvider: http
+rm -rf ~/.dsh/profiles/probe
+```
+
+插件有没有装上是另一回事，用 `dsh plugin list` 看即可（对 `desktop` 也能用）：
+
+```bash
+dsh plugin --profile desktop list      # 应列出 dsh-tavily-web-search@0.8.1
 ```
 
 再让模型跑一次 `web_search`（走 Tavily）和一次 `web_fetch`（走匿名 http provider），
