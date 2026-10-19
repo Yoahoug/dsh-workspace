@@ -127,8 +127,19 @@ dsh plugin --profile desktop list      # 应列出 dsh-tavily-web-search@0.8.1
   （默认 `~/.dsh`）**不在**这个仓库里。密钥、模型网关地址、profile 的 `cordis.patch.yml`
   都属于本机状态，不同步。这个仓库只同步「插件本体」。
 
-其他设备上同步：克隆到任意位置，然后按上面「安装到 DSH」的第 2 条装一次即可
-（每次装完记得配 Key —— 密钥不随仓库走）。
+### 在新设备上同步
+
+不用先克隆，一条命令直接从 GitHub 装（`path:` 指定子目录）：
+
+```bash
+dsh plugin --profile desktop add "git+https://github.com/Yoahoug/dsh-workspace.git#path:/dsh-tavily-web-search"
+```
+
+然后重启 DSH，在 **设置 → Tavily 搜索** 里重新加一次 Key —— 密钥存在
+`$DSH_HOME/.credentials.yaml`，不随仓库走，每台机器都要单独配。
+
+想本地留一份可编辑的副本就照常 `git clone` 到桌面，之后改完 `git commit` / `git push`，
+别的设备 `dsh plugin --profile desktop add` 重装一次（或 `pnpm update` 那个依赖）即可。
 
 ## 加一个新插件
 
