@@ -1,0 +1,41 @@
+# dsh-tavily-web-search — bundle patch layer
+#
+# Replaces the DeepSeek-backed search provider with a Tavily-backed one while
+# keeping everything else (model-facing web_search tool, fetch, LLM, ...) intact.
+#
+# 1. Point ctx.web's searchProvider at this plugin's provider id (`tavily`).
+#    The base layer sets `searchProvider: deepseek-official`; this later layer
+#    overrides it. The bundled deepseek provider row stays mounted (harmless),
+#    but the seam selects `tavily` for every web_search call.
+# 2. Keep fetchProvider pinned to the anonymous http provider.
+# 3. Insert this plugin's row so its `apply` registers the provider.
+#
+# The row id is also this plugin's settings namespace: since DSH 0.1.7 a
+# plugin's Config schema IS its configuration surface, so the settings domain
+# serves the volatile fields of `web-search-tavily` to the browser without the
+# plugin registering a namespace of its own. A later layer may restate the
+# row's whole `config` (the key pool lives there) by targeting this id.
+#
+# Why fetchProvider is restated here (deviation from upstream 0.8.0):
+# a patch entry that targets an existing row REPLACES that row's whole `config`
+# object rather than merging into it (cordis-plugin-include `applyEntryPatches`).
+# Upstream only wrote `searchProvider`, which therefore dropped the base layer's
+# `fetchProvider: http`. With the DeepSeek web bundle mounted as well
+# (`@deepseek-ai/dsh-web-app` registers `deepseek-fetch-api`), the fetch seam
+# then saw two usable providers and every web_fetch call failed with:
+#
+#   WEB_PROVIDER_AMBIGUOUS: multiple usable web providers are registered
+#   (deepseek-fetch-api, http); configure one explicitly
+#
+# Stating both keys in one entry keeps the whole object intact. Do not split
+# them across two `- id: web` entries: the second one would still be a full
+# replacement, so the first one's keys would vanish again.
+
+- id: web
+  config:
+    searchProvider: tavily
+    fetchProvider: http
+
+- insert:
+    - id: web-search-tavily
+      name: 'dsh-tavily-web-search'
