@@ -94,6 +94,9 @@ dsh plugin --profile desktop add file:$PWD/dsh-tavily-web-search-0.8.1.tgz
         enabled: false
 ```
 
+（上面的 `id` / `ref` 用你旧配置里的原值；`ref` 只是凭据的**引用名**，真正的 Key 在
+`$DSH_HOME/.credentials.yaml` 里，不在这个仓库里。）
+
 ## 与上游的差异（为什么不用 npm 上的 0.8.0）
 
 npm 上最新是 `dsh-tavily-web-search@0.8.0`，它的 `cordis.patch.yml` 是：
