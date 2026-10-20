@@ -10,7 +10,7 @@ DeepSeek Harness（DSH）的**插件仓库**：放我改过、想留下的插件
 | 插件 | 做什么 |
 |---|---|
 | [`dsh-tavily-web-search`](dsh-tavily-web-search/README.md) | 让 `web_search` 走 Tavily 而不是 DeepSeek 官方搜索：多 Key 轮询、Key 存凭据服务、设置页可查每个 Key 的实时积分用量。基于上游 0.8.0，补掉了会让 `web_fetch` 全盘失效的 patch 缺陷 |
-| [`dsh-remote`](dsh-remote/README.md) | 远端操控：独立端口上的反向代理，一条长令牌链接换签名 HttpOnly Cookie 后把**原版界面**（HTTP + WebSocket）送到远端浏览器；侧边栏面板管开关、链接、轮换和访问记录 |
+| [`dsh-remote`](dsh-remote/README.md) | 远端操控：独立端口上的反向代理，给同一 WireGuard 组网里的设备用，一条长令牌链接换签名 HttpOnly Cookie 后把**原版界面**（HTTP + WebSocket）送到对端浏览器；侧边栏面板管开关、链接、轮换和访问记录 |
 
 ## 仓库结构
 
