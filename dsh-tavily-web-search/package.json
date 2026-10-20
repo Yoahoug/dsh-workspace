@@ -1,7 +1,7 @@
 {
   "name": "dsh-tavily-web-search",
-  "version": "0.8.1",
-  "description": "Tavily-backed WebSearchProvider with a pool-only multi-key settings UI, round-robin search, and official per-key usage inspection. This copy pins fetchProvider alongside searchProvider in its bundle patch.",
+  "version": "0.8.2",
+  "description": "Tavily-backed WebSearchProvider with a pool-only multi-key settings UI, round-robin search, and official per-key usage inspection. This copy pins fetchProvider alongside searchProvider in its bundle patch, and derives the /search and /usage routes from the configured endpoint so a self-hosted Tavily-compatible proxy can be addressed by its root URL.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",

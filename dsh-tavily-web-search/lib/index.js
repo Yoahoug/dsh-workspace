@@ -22,11 +22,75 @@ export const WEB_SEARCH_TAVILY_SETTINGS_NAMESPACE = 'web-search-tavily'
 export const TAVILY_USAGE_PATH = '/api/tavily/usage'
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search'
 const TAVILY_USAGE_ENDPOINT = 'https://api.tavily.com/usage'
+const TAVILY_SEARCH_ROUTE = '/search'
+const TAVILY_USAGE_ROUTE = '/usage'
 const DEFAULT_MAX_RESULTS = 8
 const REQUEST_TIMEOUT_MS = 30000
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * Parse a configured endpoint, or undefined when it is not a usable http(s) URL.
+ * Kept separate so both route builders agree on what counts as an endpoint.
+ * @param raw - the `endpoint` value from the settings document.
+ */
+function parseEndpoint(raw) {
+  if (!isNonEmptyString(raw)) return new URL(TAVILY_ENDPOINT)
+  let url
+  try {
+    url = new URL(raw.trim())
+  } catch {
+    return undefined
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+  return url
+}
+
+/**
+ * The URL a search request is posted to.
+ *
+ * Self-hosted Tavily-compatible servers (TavilyProxyManager and friends) are
+ * commonly configured by their bare origin — `http://10.66.66.66:8181/` — even
+ * though the actual REST route is `/search`; posting to the origin answers
+ * `405 Method Not Allowed`, which is easy to mistake for an invalid key. A
+ * root or `/usage` endpoint is therefore rewritten to the search route, while
+ * any path that already names a route is left untouched.
+ * @param raw - the `endpoint` value from the settings document.
+ * @returns the absolute search URL; unusable values are passed through so
+ * `fetch` reports the real failure instead of a silently rewritten one.
+ */
+function searchEndpoint(raw) {
+  const url = parseEndpoint(raw)
+  if (url === undefined) return isNonEmptyString(raw) ? raw.trim() : TAVILY_ENDPOINT
+  const path = url.pathname.replace(/\/+$/, '')
+  if (path === '') {
+    url.pathname = TAVILY_SEARCH_ROUTE
+  } else if (path.endsWith(TAVILY_USAGE_ROUTE)) {
+    url.pathname = `${path.slice(0, -TAVILY_USAGE_ROUTE.length)}${TAVILY_SEARCH_ROUTE}`
+  }
+  return url.toString()
+}
+
+/**
+ * The URL a usage request is sent to, resolved against the same server the
+ * search endpoint points at: a proxy key is only valid on the proxy that
+ * issued it, so a custom endpoint must not fall back to api.tavily.com.
+ * @param raw - the `endpoint` value from the settings document.
+ */
+function usageEndpoint(raw) {
+  const url = parseEndpoint(raw)
+  if (url === undefined) return TAVILY_USAGE_ENDPOINT
+  const path = url.pathname.replace(/\/+$/, '')
+  if (path === '') {
+    url.pathname = TAVILY_USAGE_ROUTE
+  } else if (path.endsWith(TAVILY_SEARCH_ROUTE)) {
+    url.pathname = `${path.slice(0, -TAVILY_SEARCH_ROUTE.length)}${TAVILY_USAGE_ROUTE}`
+  } else if (!path.endsWith(TAVILY_USAGE_ROUTE)) {
+    url.pathname = `${path}${TAVILY_USAGE_ROUTE}`
+  }
+  return url.toString()
 }
 
 function providerError(message, options) {
@@ -77,7 +141,7 @@ export class TavilySearchProvider {
   /** Cheap local usability check: a configured endpoint the fetch layer can parse. */
   available() {
     const options = this.resolveOptions()
-    return isNonEmptyString(options.endpoint) && URL.canParse(options.endpoint)
+    return parseEndpoint(options.endpoint) !== undefined
   }
 
   async search(request, signal) {
@@ -87,7 +151,7 @@ export class TavilySearchProvider {
     const { signal: combined, timeout } = searchSignal(signal, options.timeoutMs)
     let response
     try {
-      response = await fetch(options.endpoint, {
+      response = await fetch(searchEndpoint(options.endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
         body: JSON.stringify({
@@ -245,7 +309,7 @@ async function handleUsage(req, res, ctx, current) {
     if (!allowed.has(ref)) throw new Error('未知的 Tavily 凭据引用')
     const key = (await ctx.credentials.resolve(ref))?.value
     if (!isNonEmptyString(key)) throw new Error('此 Tavily Key 尚未配置')
-    const upstream = await fetch(TAVILY_USAGE_ENDPOINT, {
+    const upstream = await fetch(usageEndpoint(current().endpoint), {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${key}` },
     })

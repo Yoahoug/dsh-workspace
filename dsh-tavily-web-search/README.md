@@ -10,13 +10,19 @@ Tavily 支持的 `WebSearchProvider`，用于 DeepSeek Harness 的 web 能力缝
 > `peerDependencies` 是否满足当前运行时（见下方「与 DSH 0.2.0 的兼容」）。插件用到的所有
 > API 在 0.1.7 → 0.2.0 之间没有变化，因此 host/client 两半的实现保持原样。
 
-> **本仓库版本与 npm 上的 0.8.0 有一处不同**：`cordis.patch.yml` 在把 `searchProvider` 指向
-> `tavily` 的同时，把 `fetchProvider` 重新写回 `http`。npm 上的 0.8.0 只写了 `searchProvider`，
-> 而 DSH 的 patch 语义是**整段替换**目标行的 `config`（不是深合并），于是基础层的
-> `fetchProvider: http` 被一并抹掉；此时若 profile 里还挂着 `@deepseek-ai/dsh-web-app`
-> （它会注册 `deepseek-fetch-api`），fetch 缝上就有两个可用 provider，任何一次 `web_fetch`
-> 都会抛 `WEB_PROVIDER_AMBIGUOUS`。详见 [cordis.patch.yml](cordis.patch.yml) 顶部注释。
-> 只装 Tavily 搜索、不装 `dsh-web-app` 的 profile 不会触发这个问题，但两个键一起写没有任何副作用。
+> **本仓库的 0.8.2 比 npm 上的 0.8.0 多改了两处**（第一处是运行行为修正，上游发新版时
+> 用它的 `lib/` 覆盖前请重读本节，别把修好的补丁又换回有问题的那种）：
+>
+> 1. **`cordis.patch.yml` 在同一行里同时写 `searchProvider` 和 `fetchProvider`。** npm 上的 0.8.0
+>    只写了 `searchProvider`，而 DSH 的 patch 语义是**整段替换**目标行的 `config`（不是深合并），
+>    于是基础层的 `fetchProvider: http` 被一并抹掉；此时若 profile 里还挂着
+>    `@deepseek-ai/dsh-web-app`（它会注册 `deepseek-fetch-api`），fetch 缝上就有两个可用 provider，
+>    任何一次 `web_fetch` 都会抛 `WEB_PROVIDER_AMBIGUOUS`。详见 [cordis.patch.yml](cordis.patch.yml)
+>    顶部注释。只装 Tavily 搜索、不装 `dsh-web-app` 的 profile 不会触发这个问题，但两个键一起写
+>    没有任何副作用。
+> 2. **`endpoint` 现在可以填服务根地址。** `searchEndpoint()` / `usageEndpoint()` 从同一个端点推导
+>    `/search` 与 `/usage`：自建 Tavily 兼容代理通常只在 `/search` 上提供搜索，根路径是管理面板
+>    （FastAPI 会回 405，看着非常像 Key 无效）。详见下方「`endpoint` 与自建代理」。
 
 ## 特性
 
@@ -53,7 +59,7 @@ semver 比对；只要有一个区间不满足，该行就被**静默禁用**（
 `disabling profile plugin ...`）。这正是 0.7.0 在 0.2.0-rc.1 上失效的原因：它的 peer 区间是
 `^0.1.7-alpha.1`，而 `0.2.0-rc.1` 不在其中。
 
-因此 0.8.0 的改动集中在 manifest（本仓库发布为 0.8.1，只多出下面那处 patch 修正）：
+因此 0.8.0 的改动集中在 manifest（本仓库发布为 0.8.2，在它之上只多出上面那两处）：
 
 | 项 | 0.7.0 | 0.8.0 |
 |---|---|---|
@@ -117,7 +123,7 @@ https://github.com/Yoahoug/dsh-workspace#path:/dsh-tavily-web-search
 dsh plugin --profile desktop add "git+https://github.com/Yoahoug/dsh-workspace.git#path:/dsh-tavily-web-search"
 # 或本机目录 / tgz
 dsh plugin --profile desktop add file:$HOME/Desktop/dsh-workspace/dsh-tavily-web-search
-dsh plugin --profile desktop add file:/path/to/dsh-tavily-web-search-0.8.1.tgz
+dsh plugin --profile desktop add file:/path/to/dsh-tavily-web-search-0.8.2.tgz
 ```
 
 装完重启 DSH，此后模型侧每次 `web_search` 都走 Tavily。本地目录、`pnpm link` 的坑、
@@ -129,10 +135,30 @@ dsh plugin --profile desktop add file:/path/to/dsh-tavily-web-search-0.8.1.tgz
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `keys` | `[]` | API Key 池的非敏感元数据；Key 值存储在凭据服务中 |
-| `endpoint` | `https://api.tavily.com/search` | Tavily 搜索端点 |
+| `endpoint` | `https://api.tavily.com/search` | Tavily 搜索端点（可填服务根地址，见下） |
 | `searchDepth` | `advanced` | 搜索深度：`basic` / `advanced` |
 | `maxResults` | `8` | 每次搜索返回的最大结果数 |
 | `timeoutMs` | `30000` | 单次请求超时（毫秒），与调用方取消信号合并 |
+
+### `endpoint` 与自建代理
+
+官方地址是 `https://api.tavily.com/search`；用自建/第三方 Tavily 兼容代理时，把域名换掉即可。
+
+代理通常只在 `/search` 上提供搜索，**根路径 `/` 是管理面板**（甚至可能是 FastAPI 的 405 响应），
+所以「填根地址」是最常见的配置错误：
+
+```text
+http://10.66.66.66:8181/      # 根地址：插件会自动补成 /search（本仓库 0.8.2 起）
+http://10.66.66.66:8181/search  # 推荐写法：显式写全
+```
+
+`searchEndpoint()` 会在端点路径为空、或误填了 `/usage` 时补成 `/search`；已经带路径的
+（例如 `/v1/`）保持原样，不会被改写。同时 `usageEndpoint()` 由同一个端点推导出 `/usage`，
+因此「查询用量」也跟着自建代理走，而不是回落到 `api.tavily.com`（代理签发的 Key 在官方
+站点上无效）。
+
+> `query` 与 `Authorization: Bearer <key>` 的请求形状与官方一致；
+> 若代理只认 `{"api_key": ...}`，请在代理侧配置，或另行改造请求体。
 
 ## 验证
 
