@@ -24,9 +24,12 @@ DeepSeek Harness（DSH）的**插件仓库**：放我改过、想留下的插件
 |---|---|---|---|
 | `dsh-builtin-browser` | [wqty123/dsh-browser](https://github.com/wqty123/dsh-browser)（MIT） | npm：`dsh plugin --profile desktop add dsh-builtin-browser` | 共享真实浏览器：安装即得 34 个 `dsh_browser_*` 工具，agent 和一个真人可随时接管**同一个页面**；载体自动选择（桌面侧边栏 / 本机 Chrome 或 Edge / 自托管窗口） |
 | `@michengai/dsh-skills-manager` | [MichengAI/dsh-skills-manager](https://github.com/MichengAI/dsh-skills-manager)（Apache-2.0） | npm：`dsh plugin --profile desktop add @michengai/dsh-skills-manager` | 技能管理器：在一个界面里浏览、搜索、启停本机与项目的 Agent Skills，支持从 GitHub 装技能、预览更新、回收站与备份 |
+| `dsh-rewind-plugin` | [SiriLee/dsh-rewind](https://github.com/SiriLee/dsh-rewind)（MIT） | npm：`dsh plugin --profile desktop add dsh-rewind-plugin` | 就地回退（Claude Code `/rewind` 语义）：每条用户消息旁一个 ↶ 按钮或 `/rewind`、`/undo` 命令，把该消息及之后的内容同时从模型上下文和渲染对话里撤回、原文本回填输入框，可选连工作区文件一起还原。会话日志只追加回退标记，文件备份不依赖 git |
 
-> 这两个都从 **npm 官方源**装，仓库里只留这张表。`dsh-builtin-browser` 的桌面侧边栏载体还需要在
+> 这三个都从 **npm 官方源**装，仓库里只留这张表。`dsh-builtin-browser` 的桌面侧边栏载体还需要在
 > DSH 自己的安装目录里跑一次 `desktop-bridge/install.mjs`（可选，不装则用自托管窗口），细节看它自己的文档。
+>
+> `dsh-rewind-plugin` 的 npm 上还有个同名不同作者的 `dsh-rewind`，**别装错**：包名是 `dsh-rewind-plugin`。
 
 ## 仓库结构
 

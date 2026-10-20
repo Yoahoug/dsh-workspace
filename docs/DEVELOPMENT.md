@@ -22,7 +22,7 @@ $DSH_HOME/profiles/<profile>/          # $DSH_HOME 默认 ~/.dsh
 
 ### 本机当前装了什么
 
-`desktop` profile 里一共四个第三方插件，两种来源：
+`desktop` profile 里一共五个插件，两种来源：
 
 | 插件 | 来源 | 备注 |
 |---|---|---|
@@ -30,8 +30,9 @@ $DSH_HOME/profiles/<profile>/          # $DSH_HOME 默认 ~/.dsh
 | `dsh-remote` | 本仓库（`file:` 本地目录） | 自有维护，改完 `lib/` 再装一次即生效 |
 | `dsh-builtin-browser` | npm 官方源 | 别人的插件，**不复制进仓库**，按包名装 |
 | `@michengai/dsh-skills-manager` | npm 官方源 | 同上 |
+| `dsh-rewind-plugin` | npm 官方源 | 同上；注意别装成同名的 `dsh-rewind` |
 
-后两个有各自的 GitHub 仓库与 npm 包，复制一份源码进来只会让「本机这一份」和上游永久分叉；
+后三个有各自的 GitHub 仓库与 npm 包，复制一份源码进来只会让「本机这一份」和上游永久分叉；
 本仓库的根 `README.md` 里登记了包名、上游地址与安装命令，换机器照着装即可。
 
 > **判断标准**：代码是我改的、或者上游不会再原样发版 → 进仓库；上游还在发版、我只是个使用者 →
