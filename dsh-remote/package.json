@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.1.0",
-  "description": "Remote control for DeepSeek Harness: a long-token authenticated reverse proxy that serves the native DSH Web UI to a remote browser, with a status panel, device list, and link rotation.",
+  "version": "0.2.0",
+  "description": "Remote control for DeepSeek Harness over a WireGuard network: a long-token authenticated reverse proxy that serves the native DSH Web UI to a peer, with a status panel, access log and link rotation.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -46,7 +46,7 @@
     "plugin",
     "remote",
     "reverse-proxy",
-    "tunnel"
+    "wireguard"
   ],
   "license": "MIT",
   "dependencies": {

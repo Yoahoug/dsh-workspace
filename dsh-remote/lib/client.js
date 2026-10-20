@@ -6,8 +6,8 @@
  * and the token rotation that invalidates every issued link at once.
  *
  * The panel never talks to the proxy port. Every call goes to the local DSH web
- * server (same origin as this page) at `/api/dsh-remote/*`, so the remote side
- * of the tunnel has no way to reach the control surface even if its token leaks.
+ * server (same origin as this page) at `/api/dsh-remote/*`, so a WireGuard peer
+ * has no way to reach the control surface even if its token leaks.
  */
 window.__ModuleLoader__.load({
   id: 'dsh-remote',
@@ -24,7 +24,7 @@ window.__ModuleLoader__.load({
     /** Simplified Chinese dictionary; the key set is the source of truth. */
     const zh = {
       title: '远程操控',
-      subtitle: '内网穿透 · 令牌鉴权 · 访问记录',
+      subtitle: 'WireGuard 组网 · 令牌鉴权 · 访问记录',
       enable: '启用远程入口',
       disable: '关闭远程入口',
       entry: '远程入口',
@@ -55,23 +55,22 @@ window.__ModuleLoader__.load({
       refreshing: '刷新中',
       loading: '正在读取远程入口状态…',
       failed: '操作失败',
-      noLink: '先启用远程入口，或在设置里填好公网地址。',
-      needPublicUrl: '还没有公网地址。请在本插件设置里填 publicUrl（穿透给你的 https 地址），或者复制下面的本机地址测试。',
-      localLink: '本机地址（仅本机可用）',
-      tls: 'TLS',
+      allInterfaces: '全部网卡',
+      addresses: '本机网卡',
+      pickAddress: '自动识别错了？在设置里填 advertiseHost，或在下面直接改用某个网卡地址：',
       on: '开',
       off: '关',
       dismiss: '知道了',
       warningTitle: '这是整台机器的远程控制入口',
-      warningBody: '启用后，任何持有链接的人都能在这台机器上执行命令、读写文件。请只通过 HTTPS 隧道暴露，并且不要转发到不受信任的地方。',
+      warningBody: '启用后，任何持有链接的人都能在这台机器上执行命令、读写文件。只让 WireGuard 网内的设备能连到这个端口，并且不要转发到不受信任的地方。',
       restartHint: '修改监听地址或端口后需要重新启用才会生效。',
-      settingsHint: '端口、公网地址、Cookie 时长在「设置 → 插件 → dsh-remote」里配置。',
+      settingsHint: '监听地址、端口、对外地址、Cookie 时长在「设置 → 插件 → dsh-remote」里配置。',
     }
 
     /** English dictionary, checked complete against the zh key set. */
     const en = {
       title: 'Remote Access',
-      subtitle: 'Tunnel · token auth · access log',
+      subtitle: 'WireGuard · token auth · access log',
       enable: 'Enable remote entry',
       entry: 'Remote entry',
       disable: 'Stop remote entry',
@@ -102,17 +101,16 @@ window.__ModuleLoader__.load({
       refreshing: 'Refreshing',
       loading: 'Reading the remote entry state…',
       failed: 'Operation failed',
-      noLink: 'Enable the remote entry first, or set a public URL in settings.',
-      needPublicUrl: 'No public URL yet. Set publicUrl in this plugin’s settings (the https address your tunnel gives you), or copy the local address below to test.',
-      localLink: 'Local address (this machine only)',
-      tls: 'TLS',
+      allInterfaces: 'All interfaces',
+      addresses: 'Local interfaces',
+      pickAddress: 'Wrong address picked? Set advertiseHost in settings, or use one of these:',
       on: 'on',
       off: 'off',
       dismiss: 'Got it',
       warningTitle: 'This is remote control of the whole machine',
-      warningBody: 'Once enabled, anyone holding the link can run commands and read or write files here. Expose it only through an HTTPS tunnel you trust.',
+      warningBody: 'Once enabled, anyone holding the link can run commands and read or write files here. Let only devices on your WireGuard network reach this port, and never forward it somewhere untrusted.',
       restartHint: 'After changing the listen address or port, disable and enable again.',
-      settingsHint: 'Port, public URL and cookie lifetime live in Settings → Plugins → dsh-remote.',
+      settingsHint: 'Listen address, port, advertised host and cookie lifetime live in Settings → Plugins → dsh-remote.',
     }
     // #endregion
 
@@ -336,6 +334,21 @@ window.__ModuleLoader__.load({
       return `${browser} · ${system}`
     }
 
+    /**
+     * Pull the token out of a panel link.
+     *
+     * The per-interface buttons reuse the same token under a different host, so
+     * they must read it from the link the host already issued instead of asking
+     * for a second one.
+     * @param value - full link.
+     * @returns the token, or an empty string when the link has none.
+     */
+    function extractToken(value) {
+      if (typeof value !== 'string') return ''
+      const at = value.indexOf('token=')
+      return at === -1 ? '' : value.slice(at + 'token='.length)
+    }
+
     /** Copy text, falling back to a hidden textarea on insecure origins. */
     async function copyText(value) {
       if (navigator.clipboard?.writeText) {
@@ -422,7 +435,7 @@ window.__ModuleLoader__.load({
           return
         }
         void makeLink()
-      }, [status?.publicRoot, status?.publicRootError, status?.host, status?.port, status?.rotatedAt])
+      }, [status?.advertiseHost, status?.advertiseError, status?.host, status?.port, status?.linkHost, status?.rotatedAt])
 
       const toggle = async (next) => {
         setBusy('toggle')
@@ -472,7 +485,7 @@ window.__ModuleLoader__.load({
       }
 
       const running = status?.listening === true && status?.enabled === true
-      const hasPublic = typeof status?.publicRoot === 'string' && status.publicRoot !== ''
+      const addressList = Array.isArray(status?.addresses) ? status.addresses : []
       // A link fetched before the current token generation is a dead credential:
       // it answers 401. Never show or copy it as if it worked.
       const linkStale = link !== null
@@ -561,8 +574,8 @@ window.__ModuleLoader__.load({
                   jsx('div', { className: 'dsr-statLabel', children: t('listen') }),
                   jsx('div', {
                     className: 'dsr-statValue mono',
-                    title: `${status?.protocol ?? ''}//${status?.host ?? ''}:${status?.port ?? ''}`,
-                    children: `${status?.host ?? '—'}:${status?.port ?? '—'}`,
+                    title: `http://${status?.host || '0.0.0.0'}:${status?.port ?? ''}`,
+                    children: `${status?.wildcard === true ? t('allInterfaces') : status?.host || '—'}:${status?.port ?? '—'}`,
                   }),
                 ] }),
                 jsxs('div', { className: 'dsr-stat', children: [
@@ -593,12 +606,12 @@ window.__ModuleLoader__.load({
             jsxs('div', { className: 'dsr-cardHead', children: [
               jsx('h3', { children: t('link') }),
               jsx('span', { className: 'dsr-spacer' }),
-              link?.local ? null : jsx(LinkIcon, {}),
+              jsx(LinkIcon, {}),
             ] }),
             jsxs('div', { className: 'dsr-cardBody', children: [
               jsx('div', { className: 'dsr-note', children: t('linkHint') }),
               currentLink === null || currentLink.link === undefined || currentLink.link === ''
-                ? jsx('div', { className: 'dsr-note', children: hasPublic ? t('noLink') : t('needPublicUrl') })
+                ? jsx('div', { className: 'dsr-note', children: t('loading') })
                 : jsxs(Fragment, { children: [
                     jsx('div', { className: 'dsr-linkRow', children: [
                       jsx('div', { className: 'dsr-link', title: currentLink.link, children: currentLink.link }),
@@ -607,12 +620,26 @@ window.__ModuleLoader__.load({
                         onClick: () => { void doCopy() },
                         children: [jsx(CopyIcon, {}), jsx('span', { children: t('copy') })],
                       }),
-                      currentLink.local === true
-                        ? jsx('a', { className: 'dsr-btn', href: currentLink.link, target: '_blank', rel: 'noreferrer', children: t('open') })
-                        : null,
+                      jsx('a', { className: 'dsr-btn', href: currentLink.link, target: '_blank', rel: 'noreferrer', children: t('open') }),
                     ] }),
-                    currentLink.local === true
-                      ? jsx('div', { className: 'dsr-note', children: `${t('localLink')} · ${t('needPublicUrl')}` })
+                    status?.advertiseError
+                      ? jsx('div', { className: 'dsr-msg error', children: [
+                          jsx('span', { children: jsx(AlertIcon, {}) }),
+                          jsx('span', { className: 'dsr-msgText mono', children: status.advertiseError }),
+                        ] })
+                      : null,
+                    addressList.length > 1
+                      ? jsxs('div', { children: [
+                          jsx('div', { className: 'dsr-note', children: t('pickAddress') }),
+                          jsx('div', { className: 'dsr-linkRow', style: { marginTop: 6 }, children: addressList.map((entry) => jsx('a', {
+                            className: 'dsr-btn sm mono',
+                            href: `http://${entry.address}:${String(status?.port ?? '')}/?token=${encodeURIComponent(extractToken(currentLink.link))}`,
+                            target: '_blank',
+                            rel: 'noreferrer',
+                            title: entry.name,
+                            children: entry.address,
+                          }, `${entry.name}-${entry.address}`)) }),
+                        ] })
                       : null,
                   ] }),
             ] }),

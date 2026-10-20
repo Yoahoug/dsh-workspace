@@ -1,17 +1,22 @@
 /**
- * dsh-remote — serve the native DSH Web UI to a remote browser.
+ * dsh-remote — serve the native DSH Web UI to peers on a WireGuard network.
  *
  * The plugin opens a second HTTP listener beside the DSH web server and reverse
- * proxies it to the loopback origin. The remote browser therefore runs the
- * *unmodified* DSH client: no RPC is re-implemented here, so a DSH upgrade
- * cannot break the remote surface.
+ * proxies it to the loopback origin. A peer that has joined the WireGuard
+ * network therefore runs the *unmodified* DSH client: no RPC is re-implemented
+ * here, so a DSH upgrade cannot break the remote surface.
+ *
+ * WireGuard already encrypts the hop between peers, so this plugin deliberately
+ * has no TLS layer and no notion of a public tunnel. The only network surface it
+ * owns is the address it binds, and that address is configuration — this file
+ * hard-codes no IP: an empty `host` binds every interface, and `advertiseHost`
+ * is what the panel prints in the link.
  *
  * Two authorities are involved and they must never be confused:
  *
- *   public authority    what the remote browser sees (the `publicUrl` root set
- *                       by the tunnel, or the bind address when unset). Requests
- *                       carry this Host, and the browser holds a cookie named
- *                       for it.
+ *   peer authority      what the remote browser sees (the listening host:port,
+ *                       or `advertiseHost` when configured). Requests carry this
+ *                       Host, and the browser holds a cookie named for it.
  *   upstream authority  what the local DSH web server sees (its own bind address
  *                       and port). Requests must carry this Host, or the /api
  *                       request-trust fence rejects them with 403.
@@ -22,16 +27,15 @@
  * the two authorities, and DSH's growing per-authority cookie jar is never
  * exercised from the outside.
  *
- * Authentication on the public side is one long random token, in the shape of
- * ZCode's `hash=` link: `GET /?token=…` exchanges the token for a signed,
- * HttpOnly cookie and redirects to the clean path, exactly as DSH's own browser
- * session does. Rotating the token invalidates every issued link and every
- * cookie signed with the previous secret.
+ * Authentication is one long random token, in the shape of ZCode's `hash=` link:
+ * `GET /?token=…` exchanges the token for a signed, HttpOnly cookie and
+ * redirects to the clean path, exactly as DSH's own browser session does.
+ * Rotating the token invalidates every issued link and every cookie signed with
+ * the previous secret.
  */
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
-import { createServer as createHttpsServer, request as httpsRequest } from 'node:https'
-import { readFileSync } from 'node:fs'
 import { connect } from 'node:net'
+import { networkInterfaces } from 'node:os'
 import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
 
@@ -43,13 +47,18 @@ export const inject = ['webServer', 'credentials']
 /** The plugin's live configuration. Volatile fields are what the settings UI edits. */
 export const Config = z.object({
   enabled: z.boolean().default(false).volatile(),
-  host: z.string().default('127.0.0.1').volatile(),
+  /**
+   * Bind address. Empty listens on every interface; set it to the WireGuard
+   * address to keep the listener off every other network. Never a constant here.
+   */
+  host: z.string().default('').volatile(),
   port: z.natural().min(1).max(65535).default(17800).volatile(),
-  /** The tunnel's public root, e.g. `https://dsh.example.com`. Empty until a tunnel exists. */
-  publicUrl: z.string().default('').volatile(),
-  /** Optional PEM material; when both are set the listener itself serves TLS. */
-  tlsCertFile: z.string().default('').volatile(),
-  tlsKeyFile: z.string().default('').volatile(),
+  /**
+   * Address the panel prints in the link. Empty means "use the bind address, or
+   * auto-detect when the bind is a wildcard". A host name or IPv4 address only;
+   * the port always comes from `port`.
+   */
+  advertiseHost: z.string().default('').volatile(),
   /** Browser cookie lifetime in days; the panel can always hand out a fresh link. */
   cookieMaxAgeDays: z.natural().min(1).default(14).volatile(),
 })
@@ -83,8 +92,68 @@ const HOP_BY_HOP = new Set([
 /** Response headers that must not be copied verbatim from upstream. */
 const RESPONSE_SKIP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'trailer', 'content-length'])
 
+/** Interface names that usually carry the WireGuard address; only used to rank auto-detection. */
+const WIREGUARD_NAME = /wireguard|tailscale|zerotier|(^|[^a-z])wg/iu
+
 const base64url = (buffer) => Buffer.from(buffer).toString('base64')
   .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
+
+/**
+ * Whether a bind address means "every interface".
+ * @param {string} host - configured bind address.
+ * @returns {boolean} true for the empty, IPv4-any and IPv6-any forms.
+ */
+function isWildcardHost(host) {
+  return host === '' || host === '0.0.0.0' || host === '::'
+}
+
+/**
+ * Whether an IPv4 address is in a private range. Used only to rank the addresses
+ * offered for auto-detection, never to assume which network is the right one.
+ * @param {string} address - dotted IPv4 address.
+ * @returns {boolean} whether it is private (RFC 1918).
+ */
+function isPrivateAddress(address) {
+  const parts = address.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false
+  if (parts[0] === 10) return true
+  if (parts[0] === 192 && parts[1] === 168) return true
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+  return false
+}
+
+/**
+ * Every non-internal IPv4 address this machine currently has, best guess first:
+ * a WireGuard-looking interface, then a private address, then anything else.
+ * @returns {{name: string, address: string}[]} candidate addresses.
+ */
+function localAddresses() {
+  const found = []
+  for (const [name, entries] of Object.entries(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== 'IPv4' && entry.family !== 4) continue
+      if (entry.internal) continue
+      found.push({ name, address: entry.address })
+    }
+  }
+  const rank = (item) => WIREGUARD_NAME.test(item.name) ? 0 : isPrivateAddress(item.address) ? 1 : 2
+  return found.sort((left, right) => rank(left) - rank(right) || left.name.localeCompare(right.name))
+}
+
+/**
+ * Normalize a configured advertise host.
+ * The value is a host name or IPv4 literal: the port always comes from `port`,
+ * and a path would make the printed link wrong.
+ * @param {string} value - configured advertiseHost.
+ * @returns {{error: string} | {host: string}} the usable host, or a reason.
+ */
+function parseAdvertiseHost(value) {
+  const text = String(value ?? '').trim()
+  if (text === '') return { host: '' }
+  if (/[\s/?#@]/u.test(text)) return { error: `advertiseHost 只能是主机名或 IP，不能带协议、端口或路径：${text}` }
+  if (text.includes(':')) return { error: `advertiseHost 不要带端口，端口由 port 决定：${text}` }
+  return { host: text }
+}
 
 /**
  * Decode base64url strictly, so a tampered cookie fails instead of decoding to garbage.
@@ -127,20 +196,18 @@ function cookieValue(header, cookieName) {
 }
 
 /**
- * Serialize the public session cookie.
+ * Serialize the session cookie.
  *
- * `Secure` follows this listener's own transport, never the advertised tunnel:
- * when a tunnel terminates TLS the hop to us is plain HTTP, and marking the
- * cookie Secure there would make the browser drop it.
+ * No `Secure` attribute: the hop a WireGuard peer takes is plain HTTP, and a
+ * Secure cookie would simply be dropped by the browser. Encryption belongs to
+ * the WireGuard layer, not to a cookie flag.
  * @param {string} cookieName - authority-derived name.
  * @param {string} value - signed payload.
  * @param {number} maxAgeSeconds - lifetime.
- * @param {boolean} secure - whether this listener serves TLS.
  * @returns {string} Set-Cookie value.
  */
-function sessionCookie(cookieName, value, maxAgeSeconds, secure) {
-  const attributes = `${cookieName}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; HttpOnly; SameSite=Lax`
-  return secure ? `${attributes}; Secure` : attributes
+function sessionCookie(cookieName, value, maxAgeSeconds) {
+  return `${cookieName}=${value}; Max-Age=${String(maxAgeSeconds)}; Path=/; HttpOnly; SameSite=Lax`
 }
 
 /**
@@ -183,35 +250,12 @@ function decodeCookie(secret, value) {
 }
 
 /**
- * Authority-scoped cookie name, so two tunnels on one origin never collide.
+ * Authority-scoped cookie name, so two profiles on one origin never collide.
  * @param {string} audience - origin-shaped audience key.
  * @returns {string} cookie name.
  */
 function cookieNameFor(audience) {
   return COOKIE_PREFIX + base64url(createHash('sha256').update(audience).digest())
-}
-
-/**
- * Normalize a configured public URL to a root.
- * A tunnel that mounts DSH under a path prefix is unsupported: the DSH client
- * resolves every asset and API path against the document root.
- * @param {string} value - configured publicUrl.
- * @returns {{origin: string} | {error: string}} parsed root or a reason.
- */
-function parsePublicRoot(value) {
-  const text = String(value ?? '').trim().replace(/\/+$/u, '')
-  if (text === '') return { error: '' }
-  let url
-  try {
-    url = new URL(text)
-  } catch {
-    return { error: `publicUrl 不是合法 URL：${text}` }
-  }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { error: `publicUrl 必须是 http(s) 地址：${text}` }
-  if (url.username !== '' || url.password !== '') return { error: 'publicUrl 不能携带用户名或密码' }
-  if (url.search !== '' || url.hash !== '') return { error: 'publicUrl 不能带查询串或片段' }
-  if (url.pathname !== '/') return { error: 'publicUrl 必须是站点根地址，不能带路径前缀（DSH 客户端按根路径解析资源）' }
-  return { origin: url.origin }
 }
 
 /**
@@ -327,7 +371,7 @@ class RemoteAccessStore {
 /**
  * Read a small JSON body.
  * @param {import('node:http').IncomingMessage} req - request.
- * @returns {Promise<any>} parsed body, or an empty object.
+ * @returns {Promise<any>} parsed body, or an empty object when there is none.
  */
 async function readJsonBody(req) {
   const chunks = []
@@ -385,13 +429,28 @@ class RemoteProxy {
   /** @returns {URL} the upstream DSH web origin. */
   resolveUpstream() {
     if (this.upstream !== undefined) return this.upstream
-    this.upstream = new URL(this.options.webServer.getOrigin())
+    const origin = new URL(this.options.webServer.getOrigin())
+    if (origin.protocol !== 'http:') {
+      throw new Error(`dsh-remote: 本机 DSH 上游必须是 http 地址，当前是 ${origin.origin}`)
+    }
+    this.upstream = origin
     return this.upstream
   }
 
-  /** @returns {boolean} whether this listener serves TLS. */
-  get secure() {
-    return this.server?.dshRemoteTls === true
+  /**
+   * The host the panel should print in the link.
+   *
+   * Precedence: explicit `advertiseHost`, then a concrete bind address, then an
+   * auto-detected interface when the bind is a wildcard. A wildcard bind keeps
+   * the machine reachable but gives no host to print, hence the detection.
+   * @returns {string} host for the printed link.
+   */
+  linkHost() {
+    const config = this.options.config()
+    const advertised = parseAdvertiseHost(config.advertiseHost)
+    if ('host' in advertised && advertised.host !== '') return advertised.host
+    if (!isWildcardHost(config.host)) return config.host
+    return localAddresses()[0]?.address ?? 'localhost'
   }
 
   /**
@@ -430,17 +489,14 @@ class RemoteProxy {
   }
 
   /**
-   * The audience this listener answers on: the configured tunnel root, or the
-   * bind address when no tunnel exists yet.
+   * The authority this listener answers on: the Host the peer used.
    * @param {import('node:http').IncomingMessage} request - public request.
    * @returns {string} origin-shaped audience, or an empty string when unknowable.
    */
   audience(request) {
-    const root = parsePublicRoot(this.options.config().publicUrl)
-    if ('origin' in root) return root.origin
     const host = request.headers.host
-    if (host === undefined) return ''
-    return `${this.secure ? 'https:' : 'http:'}//${host}`
+    if (host === undefined || host === '') return ''
+    return `http://${host}`
   }
 
   /**
@@ -486,7 +542,7 @@ class RemoteProxy {
 <style>body{font:15px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;display:grid;place-items:center;min-height:100vh;background:#0f1115;color:#e6e8eb}
 main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin:.5rem 0;opacity:.8}</style>
 <main><h1>需要远程访问令牌</h1>
-<p>这是 DSH 的远程入口，必须用带令牌的完整链接打开。令牌会在首次访问时换成会话 Cookie，之后地址栏里不会留下它。</p>
+<p>这是 DSH 的 WireGuard 网内入口，必须用带令牌的完整链接打开。令牌会在首次访问时换成会话 Cookie，之后地址栏里不会留下它。</p>
 <p>请在 DSH 的「远程操控」面板里复制链接重新打开；如果链接已经轮换过，旧链接不会再生效。</p></main></html>`)
   }
 
@@ -526,7 +582,6 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
         cookieNameFor(audience),
         encodeCookie(state.secret, { version: COOKIE_PAYLOAD_VERSION, aud: audience, iat: now, exp: expiresAt }),
         days * 86_400,
-        this.secure,
       ),
     })
     response.end()
@@ -554,17 +609,17 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
     // fetches omit it and must keep omitting it.
     if (request.headers.origin !== undefined) headers.origin = upstream.origin
     headers['x-forwarded-for'] = request.socket.remoteAddress ?? 'unknown'
-    headers['x-forwarded-proto'] = this.secure ? 'https' : 'http'
-    const root = parsePublicRoot(this.options.config().publicUrl)
-    if ('origin' in root) headers['x-forwarded-host'] = new URL(root.origin).host
+    headers['x-forwarded-proto'] = 'http'
+    const host = this.linkHost()
+    if (host !== '') headers['x-forwarded-host'] = isWildcardHost(host) ? upstream.host : `${host}:${String(this.options.config().port)}`
     return headers
   }
 
   /**
-   * Rewrite an upstream redirect target onto the public origin.
+   * Rewrite an upstream redirect target so the peer stays on its own origin.
    * @param {string} location - upstream Location value.
    * @param {URL} upstream - upstream origin.
-   * @returns {string} public-facing location.
+   * @returns {string} peer-facing location.
    */
   publicRedirect(location, upstream) {
     let target
@@ -574,8 +629,6 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
       return location
     }
     if (target.origin !== upstream.origin) return location
-    const root = parsePublicRoot(this.options.config().publicUrl)
-    if ('origin' in root) return `${root.origin}${target.pathname}${target.search}`
     return `${target.pathname}${target.search}`
   }
 
@@ -590,13 +643,12 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
     const upstream = this.resolveUpstream()
     const cookie = await this.upstreamSession()
     const headers = this.upstreamHeaders(request, upstream, cookie)
-    const send = upstream.protocol === 'https:' ? httpsRequest : httpRequest
 
     await new Promise((resolve) => {
-      const proxied = send({
+      const proxied = httpRequest({
         protocol: upstream.protocol,
         hostname: upstream.hostname,
-        port: upstream.port === '' ? undefined : Number(upstream.port),
+        port: upstream.port === '' ? 80 : Number(upstream.port),
         path: request.url ?? '/',
         method: request.method ?? 'GET',
         headers,
@@ -608,7 +660,7 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
         }
         if (typeof outgoing.location === 'string') outgoing.location = this.publicRedirect(outgoing.location, upstream)
         // Upstream Set-Cookie belongs to the upstream authority; the browser must
-        // never receive it, because it would never be valid on the public origin.
+        // never receive it, because it would never be valid on the peer origin.
         delete outgoing['set-cookie']
         response.writeHead(upstreamResponse.statusCode ?? 502, outgoing)
         upstreamResponse.pipe(response)
@@ -643,7 +695,7 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
     const upstream = this.resolveUpstream()
     const cookie = await this.upstreamSession().catch(() => undefined)
     socket.on('error', () => undefined)
-    const port = upstream.port === '' ? (upstream.protocol === 'https:' ? 443 : 80) : Number(upstream.port)
+    const port = upstream.port === '' ? 80 : Number(upstream.port)
 
     const target = connect(port, upstream.hostname, () => {
       const lines = [`GET ${request.url ?? '/'} HTTP/1.1`]
@@ -712,19 +764,15 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
   /** @returns {Promise<void>} open the socket. */
   async open() {
     const config = this.options.config()
-    const hasCert = config.tlsCertFile !== ''
-    const hasKey = config.tlsKeyFile !== ''
-    if (hasCert !== hasKey) throw new Error('dsh-remote：tlsCertFile 和 tlsKeyFile 必须同时设置')
+    const address = parseAdvertiseHost(config.advertiseHost)
+    if ('error' in address) throw new Error(address.error)
     const handler = (request, response) => {
       this.handleHttp(request, response).catch((error) => {
         if (!response.headersSent) writeJson(response, 500, { ok: false, message: error instanceof Error ? error.message : String(error) })
         else response.destroy()
       })
     }
-    const server = hasCert && hasKey
-      ? createHttpsServer({ cert: readFileSync(config.tlsCertFile), key: readFileSync(config.tlsKeyFile) }, handler)
-      : createHttpServer(handler)
-    server.dshRemoteTls = hasCert && hasKey
+    const server = createHttpServer(handler)
     server.on('upgrade', (request, socket, head) => {
       this.handleUpgrade(request, socket, head).catch(() => socket.destroy())
     })
@@ -737,7 +785,8 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
       const listening = () => { server.off('error', failed); resolve() }
       server.once('error', failed)
       server.once('listening', listening)
-      server.listen(config.port, config.host)
+      if (isWildcardHost(config.host)) server.listen(config.port)
+      else server.listen(config.port, config.host)
     })
     this.server = server
     this.lastError = undefined
@@ -755,8 +804,8 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
   }
 
   /**
-   * The authority the listener is bound to and whether it matches one host:port.
-   * @param {string} host - desired bind address.
+   * Whether the live socket already listens on the wanted authority.
+   * @param {string} host - desired bind address (empty means every interface).
    * @param {number} port - desired port.
    * @returns {boolean} whether the live socket already matches.
    */
@@ -764,13 +813,15 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
     const server = this.server
     if (server === undefined) return false
     const address = server.address()
-    return address !== null && typeof address === 'object' && address.address === host && address.port === port
+    if (address === null || typeof address !== 'object' || address.port !== port) return false
+    if (isWildcardHost(host)) return address.address === '::' || address.address === '0.0.0.0'
+    return address.address === host
   }
 
   /** @returns {object} a snapshot for the panel. */
   snapshot() {
     const config = this.options.config()
-    const root = parsePublicRoot(config.publicUrl)
+    const advertised = parseAdvertiseHost(config.advertiseHost)
     // Read the upstream eagerly: the panel should show the real local DSH address
     // even before the first proxied request, not "—" until traffic happens.
     let upstream = null
@@ -784,9 +835,11 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
       listening: this.server !== undefined,
       host: config.host,
       port: config.port,
-      protocol: this.secure ? 'https:' : 'http:',
-      publicRoot: 'origin' in root ? root.origin : '',
-      publicRootError: 'error' in root ? root.error : '',
+      wildcard: isWildcardHost(config.host),
+      advertiseHost: config.advertiseHost,
+      advertiseError: 'error' in advertised ? advertised.error : '',
+      linkHost: this.linkHost(),
+      addresses: localAddresses(),
       upstream,
       lastError: this.lastError ?? null,
       stats: { ...this.stats },
@@ -799,7 +852,7 @@ main{max-width:34rem;padding:2rem}h1{font-size:1.15rem;margin:0 0 .8rem}p{margin
  *
  * The proxy gets its own listener because DSH's web server is loopback-bound by
  * construction (`dsh web` rejects a wildcard bind) and this plugin must never
- * widen that: the proxy is the only surface a tunnel reaches, and it
+ * widen that: the proxy is the only surface a WireGuard peer reaches, and it
  * authenticates before a single byte is forwarded.
  * @param {any} ctx - plugin context.
  * @param {any} [section] - resolved configuration section.
@@ -821,11 +874,9 @@ export function apply(ctx, section) {
   /** @returns {object} current configuration values. */
   const readConfig = () => ({
     enabled: read('enabled', false) === true,
-    host: String(read('host', '127.0.0.1')),
+    host: String(read('host', '')),
     port: Number(read('port', 17800)),
-    publicUrl: String(read('publicUrl', '')),
-    tlsCertFile: String(read('tlsCertFile', '')),
-    tlsKeyFile: String(read('tlsKeyFile', '')),
+    advertiseHost: String(read('advertiseHost', '')),
     cookieMaxAgeDays: Number(read('cookieMaxAgeDays', 14)),
   })
 
@@ -845,7 +896,8 @@ export function apply(ctx, section) {
 
   /**
    * Reconcile the listener with the live configuration: disabling stops it,
-   * changing host or port rebinds, and an unchanged address is left alone.
+   * changing host, port or advertise host rebinds, and an unchanged authority is
+   * left alone.
    * @returns {Promise<void>} completion.
    */
   const reconcile = async () => {
@@ -868,7 +920,7 @@ export function apply(ctx, section) {
   ctx.effect(() => {
     void reconcile()
     return async () => { await proxy.stop() }
-  }, 'dsh-remote: public listener')
+  }, 'dsh-remote: listener')
 
   // A settings write is how the panel toggles the entry and how a user changes
   // the port, so the same event drives the listener.
@@ -909,7 +961,7 @@ export function apply(ctx, section) {
   }), 'dsh-remote: access route')
 
   // The link is only ever handed out to the local page, which is already behind
-  // DSH's own browser session; the tunnel never serves this route itself.
+  // DSH's own browser session; the peer listener never serves this route itself.
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: `${API_PREFIX}/link`,
@@ -918,20 +970,18 @@ export function apply(ctx, section) {
       const state = await loadState(response)
       if (state === undefined) return
       const config = readConfig()
-      const root = parsePublicRoot(config.publicUrl)
+      const advertised = parseAdvertiseHost(config.advertiseHost)
       // `rotatedAt` travels with the link so the panel can tell a fresh token
       // from one it fetched before some other rotation invalidated it.
       const rotatedAt = state.rotatedAt
-      if ('error' in root) {
-        if (root.error !== '') return writeJson(response, 400, { ok: false, message: root.error })
-        return writeJson(response, 200, {
-          ok: true,
-          local: true,
-          rotatedAt,
-          link: `http://${config.host}:${String(config.port)}/?token=${state.token}`,
-        })
-      }
-      writeJson(response, 200, { ok: true, local: false, rotatedAt, link: `${root.origin}/?token=${state.token}` })
+      if ('error' in advertised) return writeJson(response, 400, { ok: false, message: advertised.error })
+      const host = proxy.linkHost()
+      writeJson(response, 200, {
+        ok: true,
+        rotatedAt,
+        host,
+        link: `http://${host}:${String(config.port)}/?token=${state.token}`,
+      })
     },
   }), 'dsh-remote: link route')
 
