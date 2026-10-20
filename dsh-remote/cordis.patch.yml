@@ -1,0 +1,14 @@
+# dsh-remote — bundle patch layer
+#
+# Mounts one plugin row. The row id doubles as the plugin's settings namespace:
+# since DSH 0.1.7 a plugin's `Config` schema IS its configuration surface, so a
+# later patch layer (the profile's own cordis.patch.yml) can restate this row's
+# `config` to set host/port/publicUrl.
+#
+# Remember the patch semantics: overriding a row replaces its whole `config`
+# object. When customising this row in a profile, restate every key that matters
+# rather than only the one being changed.
+
+- insert:
+    - id: dsh-remote
+      name: 'dsh-remote'
