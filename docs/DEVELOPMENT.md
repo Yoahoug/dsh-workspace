@@ -224,3 +224,12 @@ dsh plugin --profile desktop list      # 应列出 dsh-tavily-web-search@0.8.2�
 
 本仓库同步的只有「插件本体」，换一台机器仍然要自己：装 DSH、在设置页重配 Key、
 必要时配代理。
+
+## 改插件代码：另起调试实例
+
+上面这些都是「装插件」。**改插件代码**（自己的或二改别人的）是另一条路：桌面主实例被
+Electron 独占、又在跑日常会话，不能拿来当调试对象，改坏 `lib/` 会当场影响正在用的界面。
+
+隔离实例、`link:` 挂仓库、host/client 两侧热重载、面板验证与清理，整套流程见
+[DEV-INSTANCE.md](DEV-INSTANCE.md)；agent 的硬约束写在根目录的
+[AGENTS.md](../AGENTS.md)。

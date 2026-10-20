@@ -32,7 +32,9 @@ DeepSeek Harness（DSH）的**插件仓库**：放我改过、想留下的插件
 
 ```
 <插件名>/                   一个自有插件一个目录：package.json + cordis.patch.yml + lib/（已构建产物）
-docs/DEVELOPMENT.md         开发、安装与「本机当前装了什么」
+docs/DEVELOPMENT.md         安装、验证、加新插件、什么不许提交
+docs/DEV-INSTANCE.md        单开调试实例：改插件代码时怎么看到效果
+AGENTS.md                   agent 必须遵守的硬约束（装插件 vs 改插件、调试规矩）
 README.md                   本文件
 LICENSE                     MIT
 ```
@@ -42,6 +44,11 @@ DSH 没有插件市场清单：一个插件就是 profile 里的一条依赖 + �
 
 每个插件装什么、怎么配，看它目录里的 README；**装法、验证、加新插件，以及哪些本机数据
 不许提交进仓库**，都在 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
+
+**改插件代码时**另起一个实例看效果 —— 桌面主实例被 Electron 独占、又在跑日常会话，
+不能拿来调试。隔离开发、热重载、面板验证的完整流程见
+[docs/DEV-INSTANCE.md](docs/DEV-INSTANCE.md)；硬约束在根目录的 [AGENTS.md](AGENTS.md)，
+agent 每次会话都会读到。
 
 ## License
 
